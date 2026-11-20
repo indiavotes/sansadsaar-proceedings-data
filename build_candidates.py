@@ -631,6 +631,8 @@ def quarantine_cluster(cs, geo, dob_year, tp="", R=None):
         for c in L:
             if c["base"] or c["house"] == career:
                 continue
+            if sum(1 for o in L if o is not c and o["house"] == c["house"]) >= 2:
+                continue        # an established career in this house too: not a cross-house jump
             rels = [geo.rel(c, o) for o in core]
             if any(x in ("same", "nbr") for x in rels):
                 continue

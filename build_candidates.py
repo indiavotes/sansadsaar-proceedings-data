@@ -395,6 +395,22 @@ class Geo:
             return {c["cnorm"]}, self.dist_of_pc.get(k, set())
         return self.pcs_of_ac.get(k, set()), self.dist_of_ac.get(k, set())
 
+    def rel(self, a, b):
+        """'same' (same seat, AC inside the PC, or shared district), 'nbr' (one
+        PC-sharing hop away), 'far' (known apart) or None (unknown)."""
+        n = self.near(a, b)
+        if n is True:
+            return "same"
+        if n is False:
+            return "far"
+        if a["skey"] == b["skey"]:
+            pa, _ = self.regions(a)
+            pb, _ = self.regions(b)
+            na = set(pa).union(*(self.pc_nbr.get((a["skey"], x), set()) for x in pa)) if pa else set()
+            if any(cons_match(x, y) for x in na for y in pb):
+                return "nbr"
+        return None
+
     def near(self, a, b):
         """True (same seat or region), False (known far apart) or None (unknown)."""
         if cons_match(a["cnorm"], b["cnorm"]) and (a["skey"] == b["skey"] or
@@ -517,7 +533,7 @@ def names_consistent(a, b) -> bool:
     return name_score(name_tokens(a["name"]), name_tokens(b["name"])) == 1.0
 
 
-def quarantine_cluster(cs, geo, dob_year):
+def quarantine_cluster(cs, geo, dob_year, tp="", R=None):
     """cs: contests of one TCPD pid (base ones are fixed). Returns {iv_id: rule}."""
     q = {}
 
@@ -596,7 +612,73 @@ def quarantine_cluster(cs, geo, dob_year):
             gap = min(abs(o["year"] - c["year"]) for o in others)
             if all(o["skey"] != c["skey"] for o in others) or gap >= 15:
                 q[c["iv_id"]] = "career jumps to a far seat in the other house under another party"
+
+    # Cross-house link (review v2 rule 1): rows in the other house must lie
+    # in, or next to, a seat of the career house. The career house is the one
+    # TCPD built the pid from (prefix GE = Lok Sabha, AE = assembly), because
+    # the reviewed errors were GE pids carried onto assembly rows; without a
+    # prefix, the majority house.
+    L = live()
+    houses = Counter(c["house"] for c in L)
+    if len(houses) == 2:
+        if tp.startswith("GE"):
+            career = "ls"
+        elif tp.startswith("AE"):
+            career = "ac"
+        else:
+            career = "ls" if houses["ls"] > houses["ac"] else "ac"
+        core = [c for c in L if c["house"] == career]
+        for c in L:
+            if c["base"] or c["house"] == career:
+                continue
+            rels = [geo.rel(c, o) for o in core]
+            if any(x in ("same", "nbr") for x in rels):
+                continue
+            if any(x is None for x in rels):
+                if R is not None:
+                    R["crosshouse_unknown"] += 1
+                continue
+            q[c["iv_id"]] = "cross-house row not in or next to a seat of the career house"
     return q
+
+
+PARTY_FAMILY = {}
+for fam, parties in {
+    "congress": "INC INC(I) INC(U) INC(O) NCO INC(S) INC(J) INC(SCS) ICS ICS(SCS) NCP AITC TMC TMC(M) WBTC "
+                "KEC(M) YSRCP CONGRESS",
+    "left": "CPI CPM CPI(M) CPI(ML) CPI(ML)(L) CPI(ML)L CPIML RSP FBL AIFB SUCI SUC PWPI MFB",
+    "janata": "JNP JNP(JP) JD JD(U) JD(S) JDU JDS SJP SJP(R) RJD JP SAP LJP JD(G) JPP JNP(SC) JNP(SR)",
+    "lokdal": "LKD BLD BKD LD DMKP RLD INLD JNP(S) HLD(R)",
+    "socialist": "SP SSP PSP SOC KMPP SPS",
+    "bjp": "BJP BJS ABJS JS",
+    "bsp": "BSP",
+    "dravidian": "DMK ADMK AIADMK MDMK DMDK PMK",
+}.items():
+    for x in parties.split():
+        PARTY_FAMILY[x] = fam
+
+
+def party_family(p: str) -> str:
+    return PARTY_FAMILY.get(p, p or "?")
+
+
+def gap_segments(L, geo):
+    """Review v2 rule 3: cut a TCPD-built record at any gap of 15+ years that
+    comes with a change of party family, unless a later seat lies in the same
+    district (or seat) as an earlier one. Returns lists of contests per
+    segment, in time order."""
+    rows = sorted(L, key=lambda c: (c["year"], c["iv_id"] or 0))
+    segs = [[rows[0]]] if rows else []
+    for c in rows[1:]:
+        prev = segs[-1]
+        last = prev[-1]
+        earlier = [x for sg in segs for x in sg]
+        if c["year"] - last["year"] >= 15 and party_family(c["party"]) != party_family(last["party"]) \
+                and not any(geo.rel(c, e) == "same" for e in earlier):
+            segs.append([c])
+        else:
+            prev.append(c)
+    return segs
 
 
 # ── Same-name candidates in one race (review rule 2) ─────────────────────
@@ -617,6 +699,20 @@ def fit(c, cluster):
     return score
 
 
+def similar_names(x: str, y: str) -> bool:
+    """Near-identical names for two candidates in one race: equal keys, a
+    one-character or doubled-letter difference, the same words in another
+    order, or one name's rare words contained in the other's (2+ words)."""
+    kx, ky = name_key(x), name_key(y)
+    if not kx or not ky:
+        return False
+    if kx == ky or names_close(kx, ky) or norm_name(x) == norm_name(y):
+        return True
+    tx, ty = name_tokens(x), name_tokens(y)
+    small, big = (tx, ty) if len(tx) <= len(ty) else (ty, tx)
+    return len(small) >= 2 and bool(rare(small)) and small <= big
+
+
 def tie_break_same_names(iv_rows, base_contests_by_tcpd):
     """Swap TCPD rows between same-name candidates in one race when party and
     vote level fit the other pid's career better. Returns list of swaps."""
@@ -627,12 +723,19 @@ def tie_break_same_names(iv_rows, base_contests_by_tcpd):
     races = defaultdict(list)
     for r in iv_rows:
         if r.get("tcpd"):
-            races[(r["house"], r["year"], r["election_key"], r["skey"], r["cnorm"], name_key(r["name"]))].append(r)
-    swaps = []
+            races[(r["house"], r["year"], r["election_key"], r["skey"], r["cnorm"])].append(r)
+    pairs = []
     for key, rs in races.items():
-        if len(rs) != 2 or not key[-1]:
+        for i in range(len(rs)):
+            for j in range(i + 1, len(rs)):
+                if similar_names(rs[i]["name"], rs[j]["name"]):
+                    pairs.append((key + (name_key(rs[i]["name"]),), rs[i], rs[j]))
+    swaps = []
+    touched = set()
+    for key, a, b in pairs:
+        if a["raw_id"] in touched or b["raw_id"] in touched or not a.get("tcpd") or not b.get("tcpd"):
             continue
-        a, b = rs
+        rs = [a, b]
         pa, pb = a["tcpd"]["pid"], b["tcpd"]["pid"]
         ca, cb = mk_contest(a), mk_contest(b)
 
@@ -645,6 +748,7 @@ def tie_break_same_names(iv_rows, base_contests_by_tcpd):
                 loser = a if fa < fb else b
                 loser["tcpd_dropped"] = loser["tcpd"]
                 loser["tcpd"] = None
+                touched |= {a["raw_id"], b["raw_id"]}
                 swaps.append((key, "same pid on both; kept the better fit", loser["raw_id"]))
             continue
         cla, clb = cluster(pa, rs), cluster(pb, rs)
@@ -652,6 +756,9 @@ def tie_break_same_names(iv_rows, base_contests_by_tcpd):
         swapped = fit(cb, cla) + fit(ca, clb)
         if swapped > now:
             a["tcpd"], b["tcpd"] = b["tcpd"], a["tcpd"]
+            touched |= {a["raw_id"], b["raw_id"]}
+            by_pid[pa] = [x for x in by_pid[pa] if x is not a] + [b]
+            by_pid[pb] = [x for x in by_pid[pb] if x is not b] + [a]
             swaps.append((key, f"swapped {pa} and {pb}", a["raw_id"]))
     return swaps
 
@@ -800,13 +907,36 @@ def attribute(iv_rows, people: People, assigner: Assigner, geo: Geo, R):
                 R["blocked_base"].append((target, people.persons[target]["name"], tp, blocked, len(rows)))
                 target = None
             cs_all = new_cs + ([] if blocked else base_cs)
-            q = quarantine_cluster(cs_all, geo, None if blocked else by)
+            q = quarantine_cluster(cs_all, geo, None if blocked else by, tp, R)
         else:
-            q = quarantine_cluster(new_cs, geo, None)
-        keep = [c for c in new_cs if c["iv_id"] not in q]
+            cs_all = new_cs
+            q = quarantine_cluster(new_cs, geo, None, tp, R)
         for c in new_cs:
             if c["iv_id"] in q:
                 quarantined.append((c, tp, q[c["iv_id"]]))
+        live = [c for c in cs_all if c["base"] or c["iv_id"] not in q]
+        segs = gap_segments(live, geo)
+        if len(segs) > 1:
+            with_base = [i for i, sg in enumerate(segs) if any(c["base"] for c in sg)]
+            if len(with_base) > 1:
+                segs = [live]           # base rows on both sides: base rows stay put, no cut
+            else:
+                k = with_base[0] if with_base else max(range(len(segs)), key=lambda i: (len(segs[i]), -i))
+                for i, sg in enumerate(segs):
+                    if i == k:
+                        continue
+                    spid = assigner.get(f"tcpd-split:{tp}:{min(c['iv_id'] for c in sg)}")
+                    people.new_person(spid, max(sg, key=lambda c: c["year"])["name"], "fallback", None,
+                                      f"tcpd_split:{tp}", 0.4)
+                    people.persons[spid]["origin"] = target or f"tcpd:{tp}"
+                    for c in sg:
+                        q[c["iv_id"]] = "split"
+                        c["tcpd_pid"] = None
+                        people.add(spid, c)
+                        out.append([spid, c, "gap-split"])
+                        R["stats"][(c["house"], "gap-split")] += 1
+                    R["gap_splits"].append((tp, spid, sg, segs[k]))
+        keep = [c for c in new_cs if c["iv_id"] not in q]
         if not keep:
             continue
         if target:
@@ -834,6 +964,7 @@ def attribute(iv_rows, people: People, assigner: Assigner, geo: Geo, R):
     for c, tp, rule in quarantined:
         pid = assigner.get(f"quarantine:{c['house']}:{c['row']['raw_id']}")
         people.new_person(pid, c["name"], "fallback", None, f"quarantine:{tp}", 0.3)
+        people.persons[pid]["origin"] = tmap.get(tp) or f"tcpd:{tp}"
         c["tcpd_pid"] = None
         people.add(pid, c)
         out.append([pid, c, "quarantine"])
@@ -900,28 +1031,17 @@ def attribute(iv_rows, people: People, assigner: Assigner, geo: Geo, R):
 # ── Split-merge pass (review rule 4) ─────────────────────────────────────
 
 
-def split_merge(people: People, out, iv_rows, R):
-    """Merge persons with the same order-kept name at the same seat in
-    consecutive elections, same non-IND party (or a TCPD-recorded switch),
-    and no two contests in one year. Base persons are never absorbed."""
-    seat_years = defaultdict(set)
-    for r in iv_rows:
-        seat_years[(r["house"], r["skey"], r["cnorm"])].add(r["year"])
-    seat_years = {k: sorted(v) for k, v in seat_years.items()}
-
-    by_seat = defaultdict(list)       # (house, skey, cnorm, nkey) -> [(pid, contest)]
-    for pid, cs in people.contests.items():
-        for c in cs:
-            if c["nkey"]:
-                by_seat[(c["house"], c["skey"], c["cnorm"], c["nkey"])].append((pid, c))
-
+def run_merges(people: People, out, candidates, method, R, assigner):
+    """Union persons pair by pair under the shared guards: base persons are
+    never absorbed (two base persons are only listed), no two contests in one
+    year, consistent dates of birth, and a quarantined or split person never
+    rejoins the record it was cut from. Returns {absorbed pid: kept pid}."""
     parent = {}
 
     def find(x):
         while parent.get(x, x) != x:
             x = parent[x]
         return x
-
     members = {}
 
     def group(x):
@@ -930,24 +1050,11 @@ def split_merge(people: People, out, iv_rows, R):
     def years(g):
         return [c["year"] for p in g for c in people.contests[p]]
 
-    candidates = []
-    for key, items in sorted(by_seat.items()):
-        pids = sorted({p for p, _ in items})
-        if len(pids) < 2:
-            continue
-        ys = seat_years.get(key[:3], [])
-        pos = {y: i for i, y in enumerate(ys)}
-        for i in range(len(items)):
-            for j in range(len(items)):
-                (pa, a), (pb, b) = items[i], items[j]
-                if pa == pb or a["year"] >= b["year"]:
-                    continue
-                if a["year"] not in pos or b["year"] not in pos or pos[b["year"]] - pos[a["year"]] != 1:
-                    continue
-                party_ok = (a["party"] == b["party"] and a["party"] != "IND") or \
-                           (b["last_party"] and b["last_party"] == a["party"] and a["party"] != "IND")
-                if party_ok:
-                    candidates.append((key, pa, pb, a, b))
+    def origin(p):
+        o = people.persons[p].get("origin")
+        if o and o.startswith("tcpd:"):
+            return assigner.by_key.get(o)
+        return o
     merges = []
     for key, pa, pb, a, b in candidates:
         ga, gb = find(pa), find(pb)
@@ -958,6 +1065,8 @@ def split_merge(people: People, out, iv_rows, R):
         base_b = [p for p in B if people.persons[p]["base"]]
         if base_a and base_b:
             R["base_dupes"].add(tuple(sorted((base_a[0], base_b[0]))))
+            continue
+        if any(origin(x) in B for x in A) or any(origin(x) in A for x in B):
             continue
         ya, yb = years(A), years(B)
         if set(ya) & set(yb):
@@ -983,26 +1092,95 @@ def split_merge(people: People, out, iv_rows, R):
             if r != root:
                 members.pop(r, None)
         merges.append((pa, pb, a, b, key))
-
-    # Apply: move contests of absorbed persons to the group root.
     moved = {}
     for root, g in members.items():
         for p in g:
             if p != root:
                 moved[p] = root
-    R["moved_rows"] = {}
     for row in out:
         if row[0] in moved:
             R["moved_rows"][row[1]["iv_id"]] = row[0]
             row[0] = moved[row[0]]
-            row[2] = "split-merge"
-            R["stats"][(row[1]["house"], "split-merge")] += 1
+            row[2] = method
+            R["stats"][(row[1]["house"], method)] += 1
     for p, root in moved.items():
         people.contests[root].extend(people.contests.pop(p, []))
         people.persons[p]["absorbed_into"] = root
-    R["merges"] = [(moved.get(pa, pa), pa, pb, a, b, k) for pa, pb, a, b, k in merges]
-    R["moved"] = moved
+    R["merge_lists"][method] = [(moved.get(pa, pa), pa, pb, a, b, k) for pa, pb, a, b, k in merges]
     return moved
+
+
+def split_merge(people: People, out, iv_rows, R, assigner):
+    """Same order-kept name at the same seat in consecutive elections, same
+    non-IND party (or a TCPD-recorded switch)."""
+    seat_years = defaultdict(set)
+    for r in iv_rows:
+        seat_years[(r["house"], r["skey"], r["cnorm"])].add(r["year"])
+    seat_years = {k: sorted(v) for k, v in seat_years.items()}
+    by_seat = defaultdict(list)
+    for pid, cs in people.contests.items():
+        for c in cs:
+            if c["nkey"]:
+                by_seat[(c["house"], c["skey"], c["cnorm"], c["nkey"])].append((pid, c))
+    candidates = []
+    for key, items in sorted(by_seat.items()):
+        if len({p for p, _ in items}) < 2:
+            continue
+        pos = {y: i for i, y in enumerate(seat_years.get(key[:3], []))}
+        for (pa, a) in items:
+            for (pb, b) in items:
+                if pa == pb or a["year"] >= b["year"]:
+                    continue
+                if a["year"] not in pos or b["year"] not in pos or pos[b["year"]] - pos[a["year"]] != 1:
+                    continue
+                if (a["party"] == b["party"] and a["party"] != "IND") or \
+                        (b["last_party"] and b["last_party"] == a["party"] and a["party"] != "IND"):
+                    candidates.append((key, pa, pb, a, b))
+    return run_merges(people, out, candidates, "split-merge", R, assigner)
+
+
+def state_compatible(a, b):
+    if a["skey"] == b["skey"]:
+        return True
+    return REORG.get(a["skey"], -1) == REORG.get(b["skey"], -2) and cons_match(a["cnorm"], b["cnorm"])
+
+
+def exact_merge(people: People, out, geo, R, assigner):
+    """Review v2 recovery: the same order-kept full name, same state, a shared
+    non-IND party, and two seats in the same district or the same Lok Sabha
+    seat (Geo.rel 'same'); no initials-to-full-name variants."""
+    region_idx = defaultdict(list)    # (name key, region key) -> [(pid, contest)]
+    for pid, cs in people.contests.items():
+        p = people.persons[pid]
+        if p.get("absorbed_into"):
+            continue
+        for c in cs:
+            if not c["nkey"] or c["party"] == "IND":
+                continue
+            pcs, dists = geo.regions(c)
+            keys = {("seat", c["cnorm"])} | {("pc", x) for x in pcs} | {("d", x) for x in dists}
+            grp = REORG.get(c["skey"], c["skey"])
+            for k in keys:
+                region_idx[(c["nkey"], grp, k)].append((pid, c))
+    seen = set()
+    candidates = []
+    for key in sorted(region_idx, key=str):
+        items = region_idx[key]
+        if len({p for p, _ in items}) < 2 or len(items) > 400:
+            continue
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                (pa, a), (pb, b) = items[i], items[j]
+                if pa == pb or (min(pa, pb), max(pa, pb)) in seen:
+                    continue
+                if a["party"] != b["party"] or not state_compatible(a, b) or geo.rel(a, b) != "same":
+                    continue
+                seen.add((min(pa, pb), max(pa, pb)))
+                x, y = (a, b) if a["year"] <= b["year"] else (b, a)
+                px, py = (pa, pb) if x is a else (pb, pa)
+                candidates.append(((x["house"], x["skey"], x["cnorm"]), px, py, x, y))
+    candidates.sort(key=lambda t: (t[3]["year"], t[4]["year"], t[1], t[2]))
+    return run_merges(people, out, candidates, "exact-merge", R, assigner)
 
 
 # ── Writing ──────────────────────────────────────────────────────────────
@@ -1120,11 +1298,25 @@ def case_checks(conn):
         "- Shivraj Singh Chouhan " + plist("n-91") + ".",
         "- Naveen Patnaik: " + fmt(who("lower(p.canonical_name) LIKE '%naveen patnaik%'")),
         "- Alakesh Das (base, unchanged) " + plist("n-1612") + ".",
+        "- Second review, wrong merges: Bheemireddy Narsimha Reddy " + plist("n-5114") + ". P. Narasimha Reddy "
+        + plist("n-5103") + ". Naugawan Sadat 2022 SP row: " + fmt(who("lower(c.constituency)='naugawan sadat' "
+                                                                       "AND c.year=2022 AND c.party_short='SP'"))
+        + ". Alibag 2014 Thakur rows: " + fmt(who("lower(c.constituency)='alibag' AND c.year=2014 "
+                                                 "AND lower(p.canonical_name) LIKE '%madhukar%'")) + ".",
+        "- Second review, missing contests: Virbhadra Singh, Mahasu 1967: " + fmt(who("lower(c.constituency)='mahasu' "
+                                                                                     "AND c.year=1967 AND c.position=1"))
+        + ". Tariq Karra 2024: " + fmt(who("lower(p.canonical_name) LIKE '%tariq hameed karra%'"))
+        + ". Bandaru Dattatreya, Secunderabad 2014: " + fmt(who("c.year=2014 AND lower(c.constituency) LIKE 'secund%' "
+                                                                 "AND c.party_short='BJP'"))
+        + ". Satya Pal Jain, Chandigarh: " + fmt(who("lower(c.constituency)='chandigarh' AND c.party_short='BJP' "
+                                                    "AND lower(p.canonical_name) LIKE '%satya pal jain%'"))
+        + ". Kejriwal, Varanasi 2014: " + fmt(who("lower(c.constituency)='varanasi' AND c.year=2014 AND c.party_short='AAP'"))
+        + ". Hemant Soren: " + fmt(who("lower(p.canonical_name)='hemant soren'")) + ".",
     ]
     return L
 
 
-def write_sample(conn, path: Path, method_of_row, merged_into, base_pids, merges, seed):
+def write_sample(conn, path: Path, method_of_row, merged_into, base_pids, merges, seed, exact=(), moved=None):
     rnd = random.Random(seed)
     multi = [pid for (pid,) in conn.execute(
         "SELECT pid FROM contests GROUP BY pid HAVING COUNT(*) >= 2 ORDER BY pid")]
@@ -1139,16 +1331,20 @@ def write_sample(conn, path: Path, method_of_row, merged_into, base_pids, merges
         "GROUP BY p.pid HAVING COUNT(*) >= 3") if pid not in base_pids)
     a = rnd.sample(merged, min(200, len(merged)))
     b = rnd.sample(minted3, min(50, len(minted3)))
-    roots = sorted({m[0] for m in merges})
+    moved = moved or {}
+    roots = sorted({moved.get(m[0], m[0]) for m in merges})
     c = rnd.sample(roots, min(50, len(roots)))
-    out = [f"# Candidate merge sample, v2 (seed {seed})", "",
+    eroots = sorted({moved.get(m[0], m[0]) for m in exact})
+    d = rnd.sample(eroots, min(50, len(eroots)))
+    out = [f"# Candidate merge sample (seed {seed})", "",
            f"Part A: {len(a)} of {len(merged)} persons with 2+ contests and at least one contest "
            "linked by name, or by TCPD to a person already in the base database.",
            f"Part B: {len(b)} of {len(minted3)} TCPD-minted persons with 3+ contests.",
            f"Part C: {len(c)} of {len(roots)} persons formed by the split-merge pass.",
+           f"Part D: {len(d)} of {len(eroots)} persons formed by the exact-merge pass.",
            "Contest columns: year, house, state, seat, party, votes, position. The tag shows how this "
            "run linked the row; 'base' means the row was already there.", ""]
-    for title, pids in (("Part A", a), ("Part B", b), ("Part C", c)):
+    for title, pids in (("Part A", a), ("Part B", b), ("Part C", c), ("Part D", d)):
         out += [f"## {title}", ""]
         for pid in pids:
             name, src, tp, anchor = conn.execute(
@@ -1164,7 +1360,7 @@ def write_sample(conn, path: Path, method_of_row, merged_into, base_pids, merges
                            f"pos {row[6]} [{m}{extra}; tcpd {row[8] or '-'}]")
             out.append("")
     path.write_text("\n".join(out) + "\n")
-    return len(a), len(b), len(c)
+    return len(a), len(b), len(c), len(d)
 
 
 def main():
@@ -1174,7 +1370,7 @@ def main():
     ap.add_argument("--tcpd-ge", type=Path, default=DEFAULT_TCPD_GE)
     ap.add_argument("--tcpd-ae", type=Path, default=DEFAULT_TCPD_AE)
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
-    ap.add_argument("--suffix", default="-v2", help="output file suffix")
+    ap.add_argument("--suffix", default="-v3", help="output file suffix")
     args = ap.parse_args()
     t0 = time.time()
     sfx = args.suffix
@@ -1218,9 +1414,16 @@ def main():
     assigner = Assigner(args.out / f"candidate_pid_assignments{sfx}.json", max(file_next, base_max + 1),
                         seed_path=args.out / "candidate_pid_assignments.json")
     R = {"stats": Counter(), "skips": Counter(), "conflicts": {}, "blocked_base": [],
-         "quarantine": [], "base_dupes": set(), "swaps": [], "merges": []}
+         "quarantine": [], "base_dupes": set(), "swaps": [], "merges": [], "merge_lists": {},
+         "moved_rows": {}, "gap_splits": [], "crosshouse_unknown": 0}
     out = attribute(iv_rows, people, assigner, geo, R)
-    moved = split_merge(people, out, iv_rows, R)
+    moved = split_merge(people, out, iv_rows, R, assigner)
+    moved.update(exact_merge(people, out, geo, R, assigner))
+    for p, root in list(moved.items()):
+        while root in moved:
+            root = moved[root]
+        moved[p] = root
+    R["merges"] = R["merge_lists"]["split-merge"]
     nulled = write(conn, people, out, moved)
     conn.execute("INSERT OR REPLACE INTO build_meta(key, value) VALUES ('candidates_built_at', ?)",
                  (time.strftime("%Y-%m-%dT%H:%M:%S%z"),))
@@ -1256,8 +1459,9 @@ def main():
 
     method_of_row = {c["iv_id"]: m for pid, c, m in out}
     merged_into = R.get("moved_rows", {})
-    n_a, n_b, n_c = write_sample(conn, args.out / f"candidates-sample{sfx}.md", method_of_row,
-                                 merged_into, base_pids, R["merges"], SEED)
+    n_a, n_b, n_c, n_d = write_sample(conn, args.out / f"candidates-sample{sfx}.md", method_of_row,
+                                      merged_into, base_pids, R["merges"], SEED,
+                                      R["merge_lists"].get("exact-merge", []), moved)
 
     after_persons = q1("SELECT COUNT(*) FROM persons")
     after_contests = q1("SELECT COUNT(*) FROM contests")
@@ -1280,11 +1484,13 @@ def main():
                         r["votes"], r["vote_share"], r["position"]])
     with open(args.out / f"candidates-split-merges{sfx}.csv", "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["kept_pid", "pid_a", "pid_b", "house", "state", "seat", "name_a", "year_a",
-                    "party_a", "name_b", "year_b", "party_b"])
-        for root, pa, pb, a, b, k in R["merges"]:
-            w.writerow([root, pa, pb, k[0], a["row"]["state"] if a["row"] else k[1], k[2],
-                        a["name"], a["year"], a["party"], b["name"], b["year"], b["party"]])
+        w.writerow(["method", "kept_pid", "pid_a", "pid_b", "house", "state", "seat_a", "name_a", "year_a",
+                    "party_a", "seat_b", "name_b", "year_b", "party_b"])
+        for m in ("split-merge", "exact-merge"):
+            for root, pa, pb, a, b, k in R["merge_lists"].get(m, []):
+                w.writerow([m, moved.get(root, root), pa, pb, k[0], a["row"]["state"] if a["row"] else k[1],
+                            a["cnorm"], a["name"], a["year"], a["party"], b["cnorm"], b["name"], b["year"],
+                            b["party"]])
     with open(args.out / f"candidates-skipped{sfx}.csv", "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["reason", "house", "iv_candidate_id", "year", "state", "seat", "name", "party",
@@ -1297,10 +1503,10 @@ def main():
     runtime = time.time() - t0
     houses = {"ls": "Lok Sabha", "ac": "Assembly"}
     methods = ["tcpd-attach", "tcpd-mint", "name-attach", "name-attach-spelling", "name-mint",
-               "quarantine", "split-merge"]
+               "quarantine", "gap-split", "split-merge", "exact-merge"]
     st = R["stats"]
     qrules = Counter(x[0] for x in R["quarantine"])
-    L = ["# Candidate extension report, v2", "",
+    L = [f"# Candidate extension report{sfx}", "",
          f"Base database: `{base}` (May 2026 copy; the published tarball carries no sqlite). "
          f"Output: `{dst}`. Runtime {runtime:.0f} s. New pids start at n-{max(file_next, base_max + 1)}, "
          f"because the base database already uses pids up to n-{base_max}.", "",
@@ -1351,9 +1557,25 @@ def main():
                       for pid, n, a, b in base_conflicts[:6]) + ".",
           f"Pairs of base persons that the split-merge rules would join (base duplicates, unchanged): "
           f"{len(R['base_dupes'])}. " + ", ".join("/".join(p) for p in sorted(R["base_dupes"])[:10]) + ".", "",
+          "## Second-review rules (v3)", "",
+          f"- Cross-house TCPD rows quarantined because the seat is not in or next to a seat of the "
+          f"career house: {qrules.get('cross-house row not in or next to a seat of the career house', 0)}. "
+          f"Rows kept because the geography is unknown (mostly seats before 1977): {R['crosshouse_unknown']}.",
+          f"- Near-identical names in one race resolved by party and vote level: {len(R['swaps'])} races "
+          f"({sum(1 for x in R['swaps'] if x[1].startswith('swapped'))} swaps, "
+          f"{sum(1 for x in R['swaps'] if not x[1].startswith('swapped'))} same-pid splits).",
+          f"- Gap splits (15+ years with a change of party family, no same-district seat continuing): "
+          f"{len(R['gap_splits'])} records cut, {sum(st[(h, 'gap-split')] for h in houses)} contests moved to "
+          "their own person (anchor 'tcpd_split:<pid>'). Examples: " + "; ".join(
+              f"{sg[0]['name']} {'/'.join(str(c['year']) + ' ' + c['party'] for c in sg)} cut from "
+              f"{kept[-1]['year']} {kept[-1]['party']}" for tp, spid, sg, kept in R["gap_splits"][:4]) + ".",
+          f"- Exact-merges (same order-kept name, same state, same non-IND party, seats in the same "
+          f"district or Lok Sabha seat, no year clash): {len(R['merge_lists'].get('exact-merge', []))} merges, "
+          f"{sum(st[(h, 'exact-merge')] for h in houses)} contests moved. Listed in candidates-split-merges{sfx}.csv; "
+          "Part D of the sample shows 50.", "",
           "## Split-merges (review rule 4)", "",
-          f"{len(R['merges'])} merges joined {len(moved)} absorbed persons into {len({m[0] for m in R['merges']})} "
-          f"kept persons, moving {sum(st[(h, 'split-merge')] for h in houses)} contests. Rule: same "
+          f"{len(R['merges'])} merges joined {len(R['merges'])} absorbed persons into "
+          f"{len({m[0] for m in R['merges']})} kept persons, moving {sum(st[(h, 'split-merge')] for h in houses)} contests. Rule: same "
           "order-kept name at the same seat in consecutive elections, same non-IND party or a TCPD-recorded "
           "switch, no two contests in one year, dates of birth consistent; base persons are never absorbed. "
           f"Every merge is listed in candidates-split-merges{sfx}.csv; Part C of the sample shows 50.", ""]
@@ -1373,7 +1595,7 @@ def main():
           f"- Persons with new contests in two states in one year and house: {same_year_new}.",
           f"- Base contest rows unchanged: {'yes' if base_ok else 'NO'}. Base person rows unchanged: "
           f"{'yes' if persons_ok else 'NO'}.",
-          f"- Sample: {n_a} Part A, {n_b} Part B, {n_c} Part C in candidates-sample{sfx}.md.", "",
+          f"- Sample: {n_a} Part A, {n_b} Part B, {n_c} Part C, {n_d} Part D in candidates-sample{sfx}.md.", "",
           "## Review cases", ""]
     L += cases
     L += ["", "## Self-check: long-career politicians", "",

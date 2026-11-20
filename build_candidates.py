@@ -442,7 +442,7 @@ def mk_contest(r, base=False):
             "cons_no": r["cons_no"], "party": r["party"], "share": r["vote_share"],
             "won": r["won"], "name": r["name"], "nkey": name_key(r["name"]), "base": base,
             "row": r, "ekey": r["election_key"], "last_party": t.get("last_party") or "",
-            "tcpd_age": t.get("age"), "iv_id": r["iv_id"]}
+            "tcpd_age": t.get("age"), "iv_id": r["iv_id"], "tname": t.get("name") or ""}
 
 
 AGE_GAP_BLOCK = 6   # years between TCPD-implied birth year and base dob that block a far link
@@ -533,7 +533,46 @@ def names_consistent(a, b) -> bool:
     return name_score(name_tokens(a["name"]), name_tokens(b["name"])) == 1.0
 
 
-def quarantine_cluster(cs, geo, dob_year, tp="", R=None):
+SAME_YEAR_RULE = "two contests in one year without the same source name, party and a two-seat pattern"
+SAME_YEAR_LONE_RULE = "two-seat run where the losing seat connects to no other seat of the record"
+
+
+def src_name(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip().upper())
+
+
+def allowed_same_year(a, b, geo) -> bool:
+    """Review v3 rule 1. Two polls in one seat (Bihar 2005) pass when the
+    names agree. Otherwise both rows must carry the identical source name
+    (IV, and TCPD where both have it) and the same party, and be either a
+    two-seat run in one house and one state or a simultaneous Lok Sabha and
+    assembly run in the same district."""
+    if cons_match(a["cnorm"], b["cnorm"]) and a["house"] == b["house"] and a["ekey"] != b["ekey"]:
+        return names_consistent(a, b)
+    if src_name(a["name"]) != src_name(b["name"]):
+        return False
+    if a.get("tname") and b.get("tname") and src_name(a["tname"]) != src_name(b["tname"]):
+        return False
+    if a["party"] != b["party"]:
+        return False
+    if a["house"] == b["house"]:
+        return a["skey"] == b["skey"]
+    return geo.rel(a, b) == "same"
+
+
+def fit_rest(c, rest, geo) -> int:
+    score = 0
+    for o in rest:
+        if c["nkey"] and c["nkey"] == o["nkey"]:
+            score += 1
+        if c["party"] != "IND" and c["party"] == o["party"]:
+            score += 1
+        if geo.rel(c, o) == "same":
+            score += 1
+    return score
+
+
+def quarantine_cluster(cs, geo, dob_year, tp="", R=None, anchored=False):
     """cs: contests of one TCPD pid (base ones are fixed). Returns {iv_id: rule}."""
     q = {}
 
@@ -551,7 +590,9 @@ def quarantine_cluster(cs, geo, dob_year, tp="", R=None):
     def support(c, others):
         return sum(1 for o in others if geo.near(c, o) or (o["party"] == c["party"] and c["party"] != "IND"))
 
-    # Same year, different state or far-apart seat, and party or name disagree.
+    # Same year (review v3 rule 1): two contests in one year stay on one
+    # record only when allowed_same_year says so; otherwise the row that fits
+    # the rest of the record less well (name, party, district) is split off.
     changed = True
     while changed:
         changed = False
@@ -561,17 +602,29 @@ def quarantine_cluster(cs, geo, dob_year, tp="", R=None):
                 a, b = L[i], L[j]
                 if a["year"] != b["year"] or (a["base"] and b["base"]):
                     continue
-                if a["iv_id"] in q or b["iv_id"] in q:
-                    continue
-                nr = geo.near(a, b)
-                if a["skey"] != b["skey"] and not cons_match(a["cnorm"], b["cnorm"]):
-                    nr = False      # one year, two states: two separate elections
-                if nr is not False:
-                    continue
-                if a["party"] == b["party"] and a["party"] != "IND" and names_consistent(a, b):
-                    continue            # one person contesting two seats for one party
                 rest = [o for o in L if o is not a and o is not b]
-                sa, sb = support(a, rest), support(b, rest)
+                if anchored and a["party"] == b["party"] and a["party"] != "IND" and names_consistent(a, b):
+                    # Records anchored on a base person (sansad-verified MP):
+                    # the third review found no tcpd-attach error, and the
+                    # strict test splits real multi-seat runs whose spelling
+                    # varies (Mulayam 1993, Shivraj 2013, Hooda 2019).
+                    if R is not None:
+                        R["anchored_same_year_kept"] += 1
+                    continue
+                if allowed_same_year(a, b, geo):
+                    # A two-seat run passes only if each seat that did not win
+                    # connects (same district or neighbouring Lok Sabha seat)
+                    # to another row of the record; a lone losing seat far from
+                    # the career is a namesake (Narender Singh, Chittorgarh 1990).
+                    lone = [x for x in (a, b) if rest and not x["base"] and not x["won"]
+                            and not cons_match(a["cnorm"], b["cnorm"])
+                            and not any(geo.rel(x, o) in ("same", "nbr") for o in rest)]
+                    if not lone:
+                        continue
+                    q[lone[0]["iv_id"]] = SAME_YEAR_LONE_RULE
+                    changed = True
+                    break
+                sa, sb = fit_rest(a, rest, geo), fit_rest(b, rest, geo)
                 if a["base"]:
                     loser = b
                 elif b["base"]:
@@ -580,7 +633,7 @@ def quarantine_cluster(cs, geo, dob_year, tp="", R=None):
                     loser = a if sa < sb else b
                 else:
                     loser = a if (a["share"] or 0) < (b["share"] or 0) else b
-                q[loser["iv_id"]] = "same year as another row, far seat or other state, party or name differs"
+                q[loser["iv_id"]] = SAME_YEAR_RULE
                 changed = True
                 break
             if changed:
@@ -664,6 +717,48 @@ def party_family(p: str) -> str:
     return PARTY_FAMILY.get(p, p or "?")
 
 
+def component_segments(L, geo):
+    """Review v3 rule 2a: group the record's seats into components joined by
+    'same' (same seat, assembly seat inside the Lok Sabha seat, shared
+    district). Split off a component when every pair across it and the main
+    component is known to be apart ('far' or 'nbr', never unknown) and its
+    name variants share no name key with the main component's."""
+    n = len(L)
+    if n < 2:
+        return [L]
+    parent = list(range(n))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    rel = {}
+    for i in range(n):
+        for j in range(i + 1, n):
+            r = geo.rel(L[i], L[j])
+            rel[(i, j)] = r
+            if r == "same" or r is None:
+                parent[find(i)] = find(j)
+    comps = defaultdict(list)
+    for i in range(n):
+        comps[find(i)].append(i)
+    if len(comps) < 2:
+        return [L]
+    groups = [[L[i] for i in idx] for idx in comps.values()]
+    groups.sort(key=lambda g: (-any(c["base"] for c in g), -len(g), -sum(c["won"] for c in g),
+                               min(c["year"] for c in g)))
+    main = groups[0]
+    main_names = {c["nkey"] for c in main}
+    out = [list(main)]
+    for g in groups[1:]:
+        if any(c["base"] for c in g) or ({c["nkey"] for c in g} & main_names):
+            out[0].extend(g)
+        else:
+            out.append(g)
+    return out
+
+
 def gap_segments(L, geo):
     """Review v2 rule 3: cut a TCPD-built record at any gap of 15+ years that
     comes with a change of party family, unless a later seat lies in the same
@@ -675,8 +770,12 @@ def gap_segments(L, geo):
         prev = segs[-1]
         last = prev[-1]
         earlier = [x for sg in segs for x in sg]
-        if c["year"] - last["year"] >= 15 and party_family(c["party"]) != party_family(last["party"]) \
+        gap = c["year"] - last["year"]
+        if gap >= 15 and party_family(c["party"]) != party_family(last["party"]) \
                 and not any(geo.rel(c, e) == "same" for e in earlier):
+            segs.append([c])
+        elif gap >= 30 and earlier and all(geo.rel(c, e) == "far" for e in earlier):
+            c["_cut30"] = True      # review v3 rule 2b: 30+ years and more than one district hop
             segs.append([c])
         else:
             prev.append(c)
@@ -909,7 +1008,7 @@ def attribute(iv_rows, people: People, assigner: Assigner, geo: Geo, R):
                 R["blocked_base"].append((target, people.persons[target]["name"], tp, blocked, len(rows)))
                 target = None
             cs_all = new_cs + ([] if blocked else base_cs)
-            q = quarantine_cluster(cs_all, geo, None if blocked else by, tp, R)
+            q = quarantine_cluster(cs_all, geo, None if blocked else by, tp, R, anchored=not blocked)
         else:
             cs_all = new_cs
             q = quarantine_cluster(new_cs, geo, None, tp, R)
@@ -917,6 +1016,20 @@ def attribute(iv_rows, people: People, assigner: Assigner, geo: Geo, R):
             if c["iv_id"] in q:
                 quarantined.append((c, tp, q[c["iv_id"]]))
         live = [c for c in cs_all if c["base"] or c["iv_id"] not in q]
+        comps = component_segments(live, geo)
+        for g in comps[1:]:
+            spid = assigner.get(f"tcpd-cluster:{tp}:{min(c['iv_id'] for c in g)}")
+            people.new_person(spid, max(g, key=lambda c: c["year"])["name"], "fallback", None,
+                              f"tcpd_cluster_split:{tp}", 0.4)
+            people.persons[spid]["origin"] = target or f"tcpd:{tp}"
+            for c in g:
+                q[c["iv_id"]] = "split"
+                c["tcpd_pid"] = None
+                people.add(spid, c)
+                out.append([spid, c, "cluster-split"])
+                R["stats"][(c["house"], "cluster-split")] += 1
+            R["cluster_splits"].append((tp, spid, g, comps[0]))
+        live = comps[0]
         segs = gap_segments(live, geo)
         if len(segs) > 1:
             with_base = [i for i, sg in enumerate(segs) if any(c["base"] for c in sg)]
@@ -938,6 +1051,8 @@ def attribute(iv_rows, people: People, assigner: Assigner, geo: Geo, R):
                         out.append([spid, c, "gap-split"])
                         R["stats"][(c["house"], "gap-split")] += 1
                     R["gap_splits"].append((tp, spid, sg, segs[k]))
+                    if any(c.get("_cut30") for c in sg):
+                        R["gap30"].add(tp)
         keep = [c for c in new_cs if c["iv_id"] not in q]
         if not keep:
             continue
@@ -999,7 +1114,10 @@ def attribute(iv_rows, people: People, assigner: Assigner, geo: Geo, R):
                 if any(cons_match(x["cnorm"], c["cnorm"]) for x in cs) \
                         and c["party"] and any(x["party"] == c["party"] for x in people.contests[pid]) \
                         and people.age_ok(pid, c["year"]) and not people.has_same_contest(pid, c):
-                    cands.append(pid)
+                    if all(allowed_same_year(c, x, geo) for x in people.contests[pid] if x["year"] == c["year"]):
+                        cands.append(pid)
+                    else:
+                        R["name_year_blocked"] += 1
         method = "name-attach"
         if not cands and c["nkey"] and c["party"] != "IND":
             near_pids = set(at_no.get((c["skey"], c["house"], c["cons_no"], c["year"] >= 2008), ()))
@@ -1012,7 +1130,8 @@ def attribute(iv_rows, people: People, assigner: Assigner, geo: Geo, R):
                 if not any(names_close(c["nkey"], nk) for nk in p["names"]):
                     continue
                 if any(seat_same(x, c) and x["party"] == c["party"] for x in people.contests[pid]) \
-                        and people.age_ok(pid, c["year"]) and not people.has_same_contest(pid, c):
+                        and people.age_ok(pid, c["year"]) and not people.has_same_contest(pid, c) \
+                        and all(allowed_same_year(c, x, geo) for x in people.contests[pid] if x["year"] == c["year"]):
                     cands.append(pid)
             method = "name-attach-spelling"
         if len(cands) == 1:
@@ -1232,7 +1351,7 @@ SELF_CHECK_NAMES = [
     ["Parkash Singh Badal", "Prakash Singh Badal"], ["Bhupinder Singh Hooda"], ["Digvijay Singh"],
     ["Kamal Nath"], ["Ghulam Nabi Azad"], ["Devendra Fadnavis"],
     ["Raman Singh", "Dr. Raman"], ["Oommen Chandy"], ["Achuthanandan"], ["Arvind Kejriwal"],
-    ["Yogi Adityanath"], ["Narendra Modi"], ["Vasundhara Raje", "Vasundhra Raje"], ["Farooq Abdullah"],
+    ["Yogi Adityanath"], ["Narendra Modi"], ["Vasundhara Raje", "Vasundhra Raje", "Vansundhara Raje"], ["Farooq Abdullah"],
     ["Hemant Soren"],
     ["Rajasekhar Reddy", "Rajasekhara Reddy"], ["Haribhai Patel", "Harilal Madhavjibhai Patel"],
     ["Narayanaswamy", "Narayana Swamy"], ["Ajay Rai"], ["Dotasara", "Dotasra"],
@@ -1314,6 +1433,16 @@ def case_checks(conn):
                                                     "AND lower(p.canonical_name) LIKE '%satya pal jain%'"))
         + ". Kejriwal, Varanasi 2014: " + fmt(who("lower(c.constituency)='varanasi' AND c.year=2014 AND c.party_short='AAP'"))
         + ". Hemant Soren: " + fmt(who("lower(p.canonical_name)='hemant soren'")) + ".",
+        "- Third review: Pratap Singh " + plist("n-171072") + ". Narendra Singh Bhati " + plist("n-39013")
+        + ". Nalini Kanta Mohanty " + plist("n-14678") + ". K.Nagaraja " + plist("n-59973")
+        + ". Charanjit Singh " + plist("n-15574") + ".",
+        "- Third review, where the cut rows went: " + fmt(who(
+            "(c.year=2019 AND lower(c.constituency)='bhadrak' AND lower(p.canonical_name) LIKE '%nalini%') OR "
+            "(c.year=1990 AND lower(c.constituency)='chittorgarh' AND c.party_short='INC') OR "
+            "(c.year IN (1984,1985) AND c.contest_type='ls' AND lower(c.constituency) IN ('patiala','ropar') "
+            "AND c.position=1) OR (lower(c.constituency)='mulbagal' AND lower(p.canonical_name) LIKE '%nagaraj%') OR "
+            "(lower(c.constituency) IN ('ghoradongri','bareli','jabera') AND lower(p.canonical_name) LIKE '%pratap singh%' "
+            "AND c.party_short='INC')")) + ".",
     ]
     return L
 
@@ -1372,7 +1501,7 @@ def main():
     ap.add_argument("--tcpd-ge", type=Path, default=DEFAULT_TCPD_GE)
     ap.add_argument("--tcpd-ae", type=Path, default=DEFAULT_TCPD_AE)
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
-    ap.add_argument("--suffix", default="-v3", help="output file suffix")
+    ap.add_argument("--suffix", default="-v4", help="output file suffix")
     args = ap.parse_args()
     t0 = time.time()
     sfx = args.suffix
@@ -1417,7 +1546,8 @@ def main():
                         seed_path=args.out / "candidate_pid_assignments.json")
     R = {"stats": Counter(), "skips": Counter(), "conflicts": {}, "blocked_base": [],
          "quarantine": [], "base_dupes": set(), "swaps": [], "merges": [], "merge_lists": {},
-         "moved_rows": {}, "gap_splits": [], "crosshouse_unknown": 0}
+         "moved_rows": {}, "gap_splits": [], "crosshouse_unknown": 0,
+         "cluster_splits": [], "gap30": set(), "name_year_blocked": 0, "anchored_same_year_kept": 0}
     out = attribute(iv_rows, people, assigner, geo, R)
     moved = split_merge(people, out, iv_rows, R, assigner)
     moved.update(exact_merge(people, out, geo, R, assigner))
@@ -1505,7 +1635,7 @@ def main():
     runtime = time.time() - t0
     houses = {"ls": "Lok Sabha", "ac": "Assembly"}
     methods = ["tcpd-attach", "tcpd-mint", "name-attach", "name-attach-spelling", "name-mint",
-               "quarantine", "gap-split", "split-merge", "exact-merge"]
+               "quarantine", "cluster-split", "gap-split", "split-merge", "exact-merge"]
     st = R["stats"]
     qrules = Counter(x[0] for x in R["quarantine"])
     L = [f"# Candidate extension report{sfx}", "",
@@ -1575,6 +1705,21 @@ def main():
           f"district or Lok Sabha seat, no year clash): {len(R['merge_lists'].get('exact-merge', []))} merges, "
           f"{sum(st[(h, 'exact-merge')] for h in houses)} contests moved. Listed in candidates-split-merges{sfx}.csv; "
           "Part D of the sample shows 50.", "",
+          "## Third-review rules (v4)", "",
+          f"- Same-year rule: {qrules.get(SAME_YEAR_RULE, 0)} rows split off "
+          f"from {len({x[3] for x in R['quarantine'] if x[0] == SAME_YEAR_RULE})} TCPD records; a further "
+          f"{qrules.get(SAME_YEAR_LONE_RULE, 0)} losing seats of two-seat runs with no link to the rest of the record "
+          f"({len({x[3] for x in R['quarantine'] if x[0] == SAME_YEAR_LONE_RULE})} records). For records anchored on a "
+          f"base person, a same-party pair with consistent names is kept: {R['anchored_same_year_kept']} pair checks. "
+          f"Name-attaches "
+          f"refused because of a same-year contest: {R['name_year_blocked']}.",
+          f"- Seat-cluster split (different districts, no shared Lok Sabha seat, disjoint name variants): "
+          f"{len(R['cluster_splits'])} clusters split off from {len({x[0] for x in R['cluster_splits']})} records, "
+          f"{sum(st[(h, 'cluster-split')] for h in houses)} contests. Examples: " + "; ".join(
+              f"{g[0]['name']} {'/'.join(str(c['year']) + ' ' + c['cnorm'] for c in g[:3])} cut from "
+              f"{main[0]['name']}" for tp, spid, g, main in R["cluster_splits"][:4]) + ".",
+          f"- 30-year gap with more than one district hop: {len(R['gap30'])} records cut (counted inside the "
+          "gap-split total above).", "",
           "## Split-merges (review rule 4)", "",
           f"{len(R['merges'])} merges joined {len(R['merges'])} absorbed persons into "
           f"{len({m[0] for m in R['merges']})} kept persons, moving {sum(st[(h, 'split-merge')] for h in houses)} contests. Rule: same "

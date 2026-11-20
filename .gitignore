@@ -14,3 +14,6 @@ docs/netas/
 
 # Local venv for running the builders by hand (see plan/ for the migration).
 .venv/
+
+# build_candidates.py outputs
+/out/

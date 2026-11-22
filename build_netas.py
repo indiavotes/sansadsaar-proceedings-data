@@ -691,6 +691,43 @@ def pivot(unified: dict[int, dict], attrib: Attribution, elig: Eligibility) -> d
             if attributed and rec.get("ministry"):
                 by_ministry_q[rec["ministry"]] += 1
 
+    # Rajya Sabha questions: one text per sitting day and type in texts-rs-*.json shards, keyed
+    # rs|RS<session>_<date>_<S|U>; parsed into questions by questions/rs_parse.py, members matched to
+    # Rajya Sabha members (age rule only: the RS roster lacks term dates).
+    print("  walking RS questions ...", flush=True)
+    from questions.rs_parse import parse as parse_rs_questions
+    seen_rs: set = set()
+    rs_q = rs_q_members = 0
+    for shard in sorted(QUESTIONS_DIR.glob("texts-rs-*.json")):
+        for rid, text in (json.loads(shard.read_text()).get("records") or {}).items():
+            m = re.match(r"^rs\|RS(\d+)_(\d{4}-\d{2}-\d{2})_([SU])$", rid)
+            if not m or not text:
+                continue
+            session, date_iso, su = int(m.group(1)), m.group(2), m.group(3)
+            qtype = "STARRED" if su == "S" else "UNSTARRED"
+            questions, _total = parse_rs_questions(text)
+            for q in questions:
+                key = (session, date_iso, q["question_no"])
+                if key in seen_rs:
+                    continue  # a list filed under both types upstream
+                seen_rs.add(key)
+                rs_q += 1
+                entry = {
+                    "house": "rs", "lok_sabha": None, "session": session,
+                    "question_no": q["question_no"], "type": qtype,
+                    "subject": q["subject"], "ministry": q["ministry"],
+                    "date": f"{date_iso[8:10]}.{date_iso[5:7]}.{date_iso[:4]}",
+                    "date_iso": date_iso, "supplementary": False,
+                }
+                for raw in q["members"]:
+                    r = attrib.resolve(raw, prefer_house="rs")
+                    codes = elig.filter(r["mpsnos"], "rs", iso=date_iso, kind="rs_questions",
+                                        label=f'{raw} | {q["subject"]}')
+                    for code in codes:
+                        rs_q_members += 1
+                        questions_by_mp[code].append({**entry, "attribution_status": r["status"]})
+    print(f"  -> RS questions parsed: {rs_q}, member links: {rs_q_members}", flush=True)
+
     print("  walking bills ...", flush=True)
     for shard in sorted(BILLS_DIR.glob("index-*.json")):
         for rec in json.loads(shard.read_text()).get("records", []):

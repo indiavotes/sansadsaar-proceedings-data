@@ -148,9 +148,12 @@ def load_sansad_terms() -> dict[tuple, list[dict]]:
     if not SANSAD_TERMS_FILE.exists():
         return {k: list(v.values()) for k, v in out.items()}
     raw = json.loads(SANSAD_TERMS_FILE.read_text())
+    ls_set = ls_mpsnos()
     for rec in raw:
         h = rec.get("house")
         mpsno = rec.get("mpsno")
+        if mpsno is not None:
+            mpsno = member_code(h, mpsno, ls_set)
         ls = rec.get("loksabha")
         if h is None or mpsno is None:
             continue
@@ -164,16 +167,36 @@ def load_sansad_terms() -> dict[tuple, list[dict]]:
     return {k: list(v.values()) for k, v in out.items()}
 
 
+# Lok Sabha and Rajya Sabha number members separately, so 274 RS members share an mpsno with an LS
+# member. They are keyed RS_CLASH_OFFSET + mpsno here and in their output files (profile/<code>.json),
+# so the LS member no longer hides them. Netas looks for that code first on a Rajya Sabha tenure.
+RS_CLASH_OFFSET = 100000
+
+
+def ls_mpsnos() -> set[int]:
+    if not SANSAD_MASTER_FILE.exists():
+        return set()
+    return {r["mpsno"] for r in json.loads(SANSAD_MASTER_FILE.read_text())
+            if r.get("house") == "ls" and r.get("mpsno") is not None}
+
+
+def member_code(house: str | None, mpsno: int, ls_set: set[int]) -> int:
+    return RS_CLASH_OFFSET + mpsno if house == "rs" and mpsno in ls_set else mpsno
+
+
 def load_sansad_master() -> dict[int, dict]:
     if not SANSAD_MASTER_FILE.exists():
         raise FileNotFoundError(
             f"Missing {SANSAD_MASTER_FILE}. Run scripts/fetch_member_master.py first."
         )
     by_mpsno: dict[int, dict] = {}
+    ls_set = ls_mpsnos()
     for rec in json.loads(SANSAD_MASTER_FILE.read_text()):
-        mpsno = rec.get("mpsno")
-        if mpsno is None:
+        if rec.get("mpsno") is None:
             continue
+        mpsno = member_code(rec.get("house"), rec["mpsno"], ls_set)
+        if mpsno != rec["mpsno"]:
+            rec = {**rec, "mpsno": mpsno, "sansad_mpsno": rec["mpsno"]}
         existing = by_mpsno.get(mpsno)
         # Prefer LS over RS for same mpsno, sitting over former.
         if existing is None:
@@ -578,6 +601,7 @@ class Eligibility:
             iso = iso_date(sm.get("dob"))
             if iso:
                 self.birth[code] = int(iso[:4])
+        self.names = {code: info.get("normalized", "") for code, info in unified.items()}
         self.dropped: Counter = Counter()
         self.samples: dict[str, list] = defaultdict(list)
 
@@ -611,6 +635,15 @@ class Eligibility:
             else:
                 keep.append(c)
         if len(keep) > 1:
+            # One person under two House numbers (an LS and an RS mpsno, as for Shri Sushil Kumar
+            # Shinde): same birth year and the same name with spaces dropped. Keep one, preferring the
+            # number in this item's House.
+            names = {re.sub(r"[^a-z]", "", self.names.get(c, "")) for c in keep}
+            births = {self.birth.get(c) for c in keep}
+            if len(names) == 1 and len(births) == 1 and None not in births:
+                same_house = [c for c in keep if (house == "rs") == (c in self.rs)]
+                self.dropped[(kind, "same_person_two_numbers")] += 1
+                return [(same_house or keep)[0]]
             self.dropped[(kind, "still_ambiguous")] += 1
             key = f"{kind}:still_ambiguous"
             if len(self.samples[key]) < 25:
@@ -847,6 +880,8 @@ def load_tcpd_history(mpsno: int, house: str) -> dict | None:
     because sansad's mpsno is NOT globally unique — LS and RS namespaces reuse
     the same integers (~274 collisions). We must read the entry that matches
     the house we ended up with in the unified master."""
+    if house == "rs" and mpsno >= RS_CLASH_OFFSET:
+        mpsno -= RS_CLASH_OFFSET  # history files use the House's own number
     p = TCPD_HISTORY_DIR / f"{house}-{mpsno}.json"
     if not p.exists():
         return None

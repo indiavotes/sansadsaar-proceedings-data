@@ -515,10 +515,118 @@ class Attribution:
         return result
 
 
+# ── Term eligibility (who could have asked / introduced this item) ────────
+
+# Date each Lok Sabha first met (YYYY-MM). An item dated before the next
+# entry belongs to that Lok Sabha.
+LS_START = [(1, "1952-04"), (2, "1957-04"), (3, "1962-04"), (4, "1967-03"),
+            (5, "1971-03"), (6, "1977-03"), (7, "1980-01"), (8, "1984-12"),
+            (9, "1989-12"), (10, "1991-06"), (11, "1996-05"), (12, "1998-03"),
+            (13, "1999-10"), (14, "2004-06"), (15, "2009-06"), (16, "2014-06"),
+            (17, "2019-06"), (18, "2024-06")]
+FIRST_SANSAD_LS = 14  # sansad_terms.json covers LS14 onward; earlier items get the age rule only
+
+
+def iso_date(d) -> str | None:
+    """Return YYYY-MM-DD from DD/MM/YYYY, DD.MM.YYYY or YYYY-MM-DD..."""
+    if not d:
+        return None
+    d = str(d).strip()
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", d)
+    if m:
+        return m.group(0)
+    m = re.match(r"^(\d{1,2})[./-](\d{1,2})[./-](\d{4})", d)
+    if m:
+        return f"{m.group(3)}-{int(m.group(2)):02d}-{int(m.group(1)):02d}"
+    return None
+
+
+def ls_for_date(iso: str | None) -> int | None:
+    if not iso:
+        return None
+    ym = iso[:7]
+    cur = None
+    for n, start in LS_START:
+        if ym >= start:
+            cur = n
+    return cur
+
+
+class Eligibility:
+    """Per canonical person: Lok Sabhas served, Rajya Sabha membership, birth
+    year. Used to drop name matches the record's date rules out (a namesake
+    who was not in the House then, or not yet 25 / 30)."""
+
+    def __init__(self, unified, terms_lookup, canonical_for_raw_key):
+        self.ls: dict[int, set] = defaultdict(set)
+        self.rs: set[int] = set()
+        self.birth: dict[int, int] = {}
+        for (h, code), recs in terms_lookup.items():
+            if h == "ls":
+                for r in recs:
+                    if r.get("loksabha"):
+                        self.ls[code].add(int(r["loksabha"]))
+            elif h == "rs":
+                self.rs.add(code)
+        for (h, raw), canon in canonical_for_raw_key.items():
+            if h == "rs":
+                self.rs.add(canon)
+        for code, info in unified.items():
+            sm = info.get("sansad") or {}
+            if sm.get("house") == "rs":
+                self.rs.add(code)
+            iso = iso_date(sm.get("dob"))
+            if iso:
+                self.birth[code] = int(iso[:4])
+        self.dropped: Counter = Counter()
+        self.samples: dict[str, list] = defaultdict(list)
+
+    def filter(self, codes, house, ls=None, iso=None, kind="", label=""):
+        if ls is None:
+            ls = ls_for_date(iso)
+        year = int(iso[:4]) if iso else None
+        keep = []
+        for c in codes:
+            reason = None
+            b = self.birth.get(c)
+            if year and b and year - b < (30 if house == "rs" else 25):
+                reason = "under_age"
+            elif house == "rs":
+                # The Rajya Sabha roster is incomplete (former members often
+                # missing), so only the age rule applies there.
+                pass
+            elif ls:
+                served = self.ls.get(c, set())
+                # No term data at all -> no evidence either way; keep.
+                # Before LS14 the term record comes only from TCPD wins, which
+                # miss some terms, so only the age rule applies there.
+                if served and ls >= FIRST_SANSAD_LS:
+                    if ls not in served:
+                        reason = "not_in_that_lok_sabha"
+            if reason:
+                self.dropped[(kind, reason)] += 1
+                key = f"{kind}:{reason}"
+                if len(self.samples[key]) < 25:
+                    self.samples[key].append({"mpsno": c, "date": iso, "ls": ls, "item": label})
+            else:
+                keep.append(c)
+        if len(keep) > 1:
+            self.dropped[(kind, "still_ambiguous")] += 1
+            key = f"{kind}:still_ambiguous"
+            if len(self.samples[key]) < 25:
+                self.samples[key].append({"mpsnos": keep, "date": iso, "ls": ls, "item": label})
+            return []
+        return keep
+
+    def report(self) -> dict:
+        return {"dropped": {f"{k}:{r}": n for (k, r), n in sorted(self.dropped.items())},
+                "samples": self.samples}
+
+
 # ── Pivot ─────────────────────────────────────────────────────────────────
 
 
-def pivot(unified: dict[int, dict], attrib: Attribution) -> dict:
+def pivot(unified: dict[int, dict], attrib: Attribution, elig: Eligibility) -> dict:
     """Walk all corpora, build per-MP feeds + global stats."""
     # Per-MP feeds
     speeches_by_mp: dict[int, list] = defaultdict(list)
@@ -573,9 +681,12 @@ def pivot(unified: dict[int, dict], attrib: Attribution) -> dict:
             attributed = False
             for raw in rec.get("members", []):
                 r = attrib.resolve(raw, prefer_house="ls")
-                if r["mpsnos"]:
+                codes = elig.filter(r["mpsnos"], "ls", ls=rec.get("lok_sabha"),
+                                    iso=iso_date(rec.get("date")), kind="questions",
+                                    label=f'{raw} | {rec.get("subject")}')
+                if codes:
                     attributed = True
-                    for code in r["mpsnos"]:
+                    for code in codes:
                         questions_by_mp[code].append({**entry, "attribution_status": r["status"]})
             if attributed and rec.get("ministry"):
                 by_ministry_q[rec["ministry"]] += 1
@@ -600,9 +711,11 @@ def pivot(unified: dict[int, dict], attrib: Attribution) -> dict:
                 continue
             house_pref = "ls" if rec.get("billIntroducedInHouse") == "Lok Sabha" else "rs"
             r = attrib.resolve(raw, prefer_house=house_pref)
-            for code in r["mpsnos"]:
+            codes = elig.filter(r["mpsnos"], house_pref, iso=iso_date(rec.get("billIntroducedDate")),
+                                kind="bills", label=f'{raw} | {rec.get("billName")}')
+            for code in codes:
                 bills_by_mp[code].append({**entry, "attribution_status": r["status"]})
-            if r["mpsnos"] and rec.get("ministryName"):
+            if codes and rec.get("ministryName"):
                 by_ministry_b[rec["ministryName"]] += 1
 
     # Sort feeds by date desc (best-effort — string sort on ISO-ish dates;
@@ -646,6 +759,7 @@ def pivot(unified: dict[int, dict], attrib: Attribution) -> dict:
 
     return {
         "speeches_by_mp": speeches_by_mp,
+        "eligibility": elig.report(),
         "questions_by_mp": questions_by_mp,
         "bills_by_mp": bills_by_mp,
         "stats": {
@@ -1221,6 +1335,7 @@ def write_outputs(unified: dict[int, dict], pivots: dict, attrib: Attribution,
     # Audit files
     attribution = {raw: r["mpsnos"] for raw, r in attrib.cache.items() if r["mpsnos"]}
     (OUT_DIR / "attribution.json").write_text(json.dumps(attribution, ensure_ascii=False, indent=2))
+    (OUT_DIR / "attribution_dropped.json").write_text(json.dumps(pivots["eligibility"], ensure_ascii=False, indent=1))
     (OUT_DIR / "unmatched.json").write_text(json.dumps(dict(attrib.unmatched.most_common()), ensure_ascii=False, indent=2))
 
     # Index
@@ -1349,9 +1464,14 @@ def main():
     print(f"  -> {len(lookup)} normalized name forms")
 
     attrib = Attribution(unified, lookup)
+    elig = Eligibility(unified, terms_lookup, canonical_for_raw_key)
+    print(f"  -> eligibility: {len(elig.ls)} persons with Lok Sabha terms, "
+          f"{len(elig.rs)} Rajya Sabha members, {len(elig.birth)} birth years")
 
     print("Pivoting corpora ...", flush=True)
-    pivots = pivot(unified, attrib)
+    pivots = pivot(unified, attrib, elig)
+    for k, n in sorted(elig.dropped.items()):
+        print(f"  dropped {k[0]} {k[1]}: {n}")
 
     # Fold alias-keyed pivot output into the canonical mpsno — happens when
     # a free-text speaker string resolved to an alias mpsno before the merge

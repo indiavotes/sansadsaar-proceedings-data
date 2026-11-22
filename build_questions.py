@@ -786,6 +786,7 @@ def extract_missing_rs_bodies(reports: dict[str, list[dict]], *, deadline: float
     bundled_markers = load_markers(DOCS)
     rs_text_dir = TEXT_DIR / "rs"
     candidates: list[tuple[int, str, str, str]] = []   # session, date_iso, qtype, pdf_url
+    rs_retry: list[tuple[int, str, str, str]] = []
     skipped_marked = 0
     skipped_bundled = 0
     for r in reports.get("rs", []):
@@ -806,15 +807,24 @@ def extract_missing_rs_bodies(reports: dict[str, list[dict]], *, deadline: float
             skipped_marked += 1; continue
         if (rs_text_dir / f"{fid}.ocr-failed").exists():
             skipped_marked += 1; continue
-        # .pypdf-error markers are retryable — fall through.
+        # .pypdf-error and .download-failed markers are retryable, but behind never-attempted
+        # files (22 Nov 2026): 25 bundles whose URLs return HTTP 500 upstream were retried first
+        # every run, so rs_extracted stayed at 0 and 681 other bundles were never tried.
+        if bm in ("pypdf-error", "download-failed") or (rs_text_dir / f"{fid}.download-failed").exists():
+            rs_retry.append((int(ses), iso, qtype, pdf_url))
+            continue
         candidates.append((int(ses), iso, qtype, pdf_url))
 
-    # Newest session first, then date desc, STARRED before UNSTARRED.
-    candidates.sort(key=lambda c: (-c[0], c[1], 0 if c[2] == "STARRED" else 1), reverse=False)
-    # Make date_iso sort desc by reversing string compare result via tuple inversion.
-    # Simpler: do two passes (stable sort).
-    candidates.sort(key=lambda c: c[1], reverse=True)
-    candidates.sort(key=lambda c: -c[0])
+    # Newest session first, then newest date, STARRED before UNSTARRED.
+    def _rs_order(items):
+        items.sort(key=lambda c: 0 if c[2] == "STARRED" else 1)
+        items.sort(key=lambda c: c[1], reverse=True)
+        items.sort(key=lambda c: -c[0])
+    _rs_order(candidates)
+    _rs_order(rs_retry)
+    print(f"  RS retry tier: {len(rs_retry)} bundles with a retryable marker "
+          f"(at most {MAX_RETRY_PER_RUN} retried per run, after never-attempted)")
+    candidates = candidates + rs_retry[:MAX_RETRY_PER_RUN]
     print(f"  RS candidates: {len(candidates)} bundles missing text "
           f"({skipped_marked} skipped — already marked; "
           f"{skipped_bundled} skipped — already in shards)")

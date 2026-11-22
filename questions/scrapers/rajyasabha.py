@@ -234,7 +234,21 @@ def download_pdf(pdf_url: str, *, session: int, date_iso: str, qtype: str,
     except RateLimited:
         raise
     except Exception as e:
-        print(f"    download failed for {fid}: {e}")
+        # Mark the failure (as the LS scraper does), so the next run puts this file in the retry
+        # tier behind never-attempted files instead of retrying the same 25 every run.
+        print(f"    download failed for {fid}: {e} — marking .download-failed")
+        try:
+            os.unlink(pdf_path)
+        except OSError:
+            pass
+        marker_dir = os.path.join(os.path.dirname(os.path.normpath(pdfs_dir)), "text",
+                                  os.path.basename(os.path.normpath(pdfs_dir)))
+        try:
+            os.makedirs(marker_dir, exist_ok=True)
+            with open(os.path.join(marker_dir, f"{fid}.download-failed"), "w", encoding="utf-8") as f:
+                f.write(f"download failed for {fid} from {pdf_url!r}: {e}\n")
+        except OSError:
+            pass
         return None
 
 

@@ -664,6 +664,35 @@ def pivot(unified: dict[int, dict], attrib: Attribution, elig: Eligibility) -> d
                 if rec.get("debate_type_desc"):
                     by_debate_type[rec["debate_type_desc"]] += 1
 
+    # Rajya Sabha debates: one text per sitting (floor version) in texts-rs-*.json shards, keyed
+    # rs|RS<session>_<date>|<version>; debates/rs_speakers.py finds who spoke under which item of
+    # business. One entry per member per item, matched to Rajya Sabha members (age rule only).
+    # NETAS_RS_DEBATE_SHARDS limits the shards read (local tests).
+    print("  walking RS debates ...", flush=True)
+    from debates.rs_speakers import speakers as rs_speakers
+    rs_d = rs_d_links = 0
+    shards_rs = sorted(DEBATES_DIR.glob("texts-rs-*.json"))
+    if os.environ.get("NETAS_RS_DEBATE_SHARDS"):
+        shards_rs = shards_rs[: int(os.environ["NETAS_RS_DEBATE_SHARDS"])]
+    for shard in shards_rs:
+        for rid, text in (json.loads(shard.read_text()).get("records") or {}).items():
+            m = re.match(r"^rs\|RS(\d+)_(\d{4}-\d{2}-\d{2})\|(\w+)$", rid)
+            if not m or not text or m.group(3) != "floor":
+                continue
+            session, date_iso = int(m.group(1)), m.group(2)
+            for item, raw in rs_speakers(text):
+                rs_d += 1
+                r = attrib.resolve(raw, prefer_house="rs")
+                codes = elig.filter(r["mpsnos"], "rs", iso=date_iso, kind="rs_debates", label=f"{raw} | {item}")
+                for code in codes:
+                    rs_d_links += 1
+                    speeches_by_mp[code].append({
+                        "house": "rs", "lok_sabha": None, "session": session, "db_slno": None,
+                        "title": item, "date": f"{date_iso[8:10]}/{date_iso[5:7]}/{date_iso[:4]}",
+                        "date_iso": date_iso, "type_code": None, "type_desc": "RAJYA SABHA",
+                    })
+    print(f"  -> RS debate turns: {rs_d}, member links: {rs_d_links}", flush=True)
+
     print("  walking questions ...", flush=True)
     for shard in sorted(QUESTIONS_DIR.glob("reports-ls-*.json")):
         for rec in json.loads(shard.read_text()).get("records", []):

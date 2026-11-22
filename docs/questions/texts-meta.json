@@ -4,14 +4,14 @@
   "r2_origin": null,
   "schema": 2,
   "totals": {
-    "records_with_text": 141720,
-    "shards": 1758,
+    "records_with_text": 141819,
+    "shards": 1809,
     "r2_fallback": 0,
-    "total_text_bytes": 3416498,
+    "total_text_bytes": 4476722,
     "missing_files": 0,
     "skipped_oversize_no_r2": 0,
-    "from_existing_shards": 141647,
-    "txt_files_removed": 73
+    "from_existing_shards": 141720,
+    "txt_files_removed": 99
   },
   "shard_stride": 250,
   "shards": [
@@ -2966,9 +2966,264 @@
       "bytes": 906293
     },
     {
-      "file": "texts-rs-RS209-2006-11-23-0000.json",
+      "file": "texts-rs-RS206-2005-12-15-0000.json",
+      "count": 2,
+      "bytes": 98057
+    },
+    {
+      "file": "texts-rs-RS206-2005-12-16-0000.json",
+      "count": 2,
+      "bytes": 101347
+    },
+    {
+      "file": "texts-rs-RS206-2005-12-19-0000.json",
+      "count": 2,
+      "bytes": 101544
+    },
+    {
+      "file": "texts-rs-RS206-2005-12-20-0000.json",
+      "count": 2,
+      "bytes": 97837
+    },
+    {
+      "file": "texts-rs-RS206-2005-12-21-0000.json",
+      "count": 2,
+      "bytes": 95215
+    },
+    {
+      "file": "texts-rs-RS206-2005-12-22-0000.json",
+      "count": 2,
+      "bytes": 99370
+    },
+    {
+      "file": "texts-rs-RS206-2005-12-23-0000.json",
+      "count": 2,
+      "bytes": 100390
+    },
+    {
+      "file": "texts-rs-RS207-2006-03-01-0000.json",
+      "count": 2,
+      "bytes": 94648
+    },
+    {
+      "file": "texts-rs-RS207-2006-03-02-0000.json",
+      "count": 2,
+      "bytes": 95130
+    },
+    {
+      "file": "texts-rs-RS207-2006-03-03-0000.json",
+      "count": 2,
+      "bytes": 96088
+    },
+    {
+      "file": "texts-rs-RS207-2006-03-06-0000.json",
+      "count": 2,
+      "bytes": 90013
+    },
+    {
+      "file": "texts-rs-RS207-2006-03-07-0000.json",
+      "count": 2,
+      "bytes": 92374
+    },
+    {
+      "file": "texts-rs-RS207-2006-03-08-0000.json",
+      "count": 2,
+      "bytes": 95253
+    },
+    {
+      "file": "texts-rs-RS207-2006-03-09-0000.json",
+      "count": 2,
+      "bytes": 94664
+    },
+    {
+      "file": "texts-rs-RS207-2006-03-10-0000.json",
       "count": 1,
-      "bytes": 12743
+      "bytes": 12931
+    },
+    {
+      "file": "texts-rs-RS207-2006-03-13-0000.json",
+      "count": 2,
+      "bytes": 96694
+    },
+    {
+      "file": "texts-rs-RS207-2006-03-14-0000.json",
+      "count": 2,
+      "bytes": 92465
+    },
+    {
+      "file": "texts-rs-RS207-2006-03-17-0000.json",
+      "count": 2,
+      "bytes": 99980
+    },
+    {
+      "file": "texts-rs-RS207-2006-05-10-0000.json",
+      "count": 2,
+      "bytes": 98018
+    },
+    {
+      "file": "texts-rs-RS207-2006-05-11-0000.json",
+      "count": 2,
+      "bytes": 98056
+    },
+    {
+      "file": "texts-rs-RS207-2006-05-12-0000.json",
+      "count": 2,
+      "bytes": 101088
+    },
+    {
+      "file": "texts-rs-RS207-2006-05-15-0000.json",
+      "count": 2,
+      "bytes": 99583
+    },
+    {
+      "file": "texts-rs-RS207-2006-05-16-0000.json",
+      "count": 2,
+      "bytes": 99736
+    },
+    {
+      "file": "texts-rs-RS207-2006-05-17-0000.json",
+      "count": 2,
+      "bytes": 99758
+    },
+    {
+      "file": "texts-rs-RS207-2006-05-18-0000.json",
+      "count": 1,
+      "bytes": 85982
+    },
+    {
+      "file": "texts-rs-RS207-2006-05-19-0000.json",
+      "count": 2,
+      "bytes": 101720
+    },
+    {
+      "file": "texts-rs-RS207-2006-05-22-0000.json",
+      "count": 2,
+      "bytes": 101496
+    },
+    {
+      "file": "texts-rs-RS207-2006-05-23-0000.json",
+      "count": 2,
+      "bytes": 98934
+    },
+    {
+      "file": "texts-rs-RS208-2006-07-24-0000.json",
+      "count": 2,
+      "bytes": 53922
+    },
+    {
+      "file": "texts-rs-RS208-2006-07-25-0000.json",
+      "count": 2,
+      "bytes": 60592
+    },
+    {
+      "file": "texts-rs-RS208-2006-07-26-0000.json",
+      "count": 2,
+      "bytes": 21853
+    },
+    {
+      "file": "texts-rs-RS208-2006-07-27-0000.json",
+      "count": 2,
+      "bytes": 91807
+    },
+    {
+      "file": "texts-rs-RS208-2006-07-28-0000.json",
+      "count": 2,
+      "bytes": 98114
+    },
+    {
+      "file": "texts-rs-RS208-2006-07-31-0000.json",
+      "count": 2,
+      "bytes": 98877
+    },
+    {
+      "file": "texts-rs-RS208-2006-08-01-0000.json",
+      "count": 2,
+      "bytes": 98953
+    },
+    {
+      "file": "texts-rs-RS208-2006-08-02-0000.json",
+      "count": 2,
+      "bytes": 97487
+    },
+    {
+      "file": "texts-rs-RS208-2006-08-03-0000.json",
+      "count": 2,
+      "bytes": 97066
+    },
+    {
+      "file": "texts-rs-RS208-2006-08-04-0000.json",
+      "count": 2,
+      "bytes": 100144
+    },
+    {
+      "file": "texts-rs-RS208-2006-08-07-0000.json",
+      "count": 2,
+      "bytes": 97965
+    },
+    {
+      "file": "texts-rs-RS208-2006-08-08-0000.json",
+      "count": 1,
+      "bytes": 12261
+    },
+    {
+      "file": "texts-rs-RS208-2006-08-10-0000.json",
+      "count": 2,
+      "bytes": 100457
+    },
+    {
+      "file": "texts-rs-RS208-2006-08-11-0000.json",
+      "count": 1,
+      "bytes": 11177
+    },
+    {
+      "file": "texts-rs-RS208-2006-08-14-0000.json",
+      "count": 2,
+      "bytes": 100184
+    },
+    {
+      "file": "texts-rs-RS208-2006-08-17-0000.json",
+      "count": 2,
+      "bytes": 103425
+    },
+    {
+      "file": "texts-rs-RS208-2006-08-18-0000.json",
+      "count": 2,
+      "bytes": 99107
+    },
+    {
+      "file": "texts-rs-RS208-2006-08-21-0000.json",
+      "count": 2,
+      "bytes": 100505
+    },
+    {
+      "file": "texts-rs-RS208-2006-08-22-0000.json",
+      "count": 2,
+      "bytes": 96173
+    },
+    {
+      "file": "texts-rs-RS208-2006-08-23-0000.json",
+      "count": 2,
+      "bytes": 98462
+    },
+    {
+      "file": "texts-rs-RS208-2006-08-24-0000.json",
+      "count": 2,
+      "bytes": 98845
+    },
+    {
+      "file": "texts-rs-RS208-2006-08-25-0000.json",
+      "count": 2,
+      "bytes": 98972
+    },
+    {
+      "file": "texts-rs-RS209-2006-11-22-0000.json",
+      "count": 2,
+      "bytes": 67166
+    },
+    {
+      "file": "texts-rs-RS209-2006-11-23-0000.json",
+      "count": 2,
+      "bytes": 95628
     },
     {
       "file": "texts-rs-RS209-2006-11-24-0000.json",

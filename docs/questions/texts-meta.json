@@ -4,14 +4,14 @@
   "r2_origin": null,
   "schema": 2,
   "totals": {
-    "records_with_text": 141513,
-    "shards": 1680,
+    "records_with_text": 141647,
+    "shards": 1718,
     "r2_fallback": 0,
-    "total_text_bytes": 740063,
+    "total_text_bytes": 3700858,
     "missing_files": 0,
     "skipped_oversize_no_r2": 0,
-    "from_existing_shards": 141358,
-    "txt_files_removed": 155
+    "from_existing_shards": 141513,
+    "txt_files_removed": 134
   },
   "shard_stride": 250,
   "shards": [
@@ -762,8 +762,8 @@
     },
     {
       "file": "texts-ls-LS16-S5-0000.json",
-      "count": 103,
-      "bytes": 483605
+      "count": 162,
+      "bytes": 866811
     },
     {
       "file": "texts-ls-LS16-S5-0001.json",
@@ -2964,6 +2964,196 @@
       "file": "texts-ls-LS18-S8-0016.json",
       "count": 141,
       "bytes": 906293
+    },
+    {
+      "file": "texts-rs-RS210-2007-05-08-0000.json",
+      "count": 2,
+      "bytes": 98395
+    },
+    {
+      "file": "texts-rs-RS210-2007-05-09-0000.json",
+      "count": 1,
+      "bytes": 12205
+    },
+    {
+      "file": "texts-rs-RS210-2007-05-10-0000.json",
+      "count": 2,
+      "bytes": 99785
+    },
+    {
+      "file": "texts-rs-RS210-2007-05-11-0000.json",
+      "count": 2,
+      "bytes": 98681
+    },
+    {
+      "file": "texts-rs-RS210-2007-05-14-0000.json",
+      "count": 2,
+      "bytes": 100808
+    },
+    {
+      "file": "texts-rs-RS210-2007-05-15-0000.json",
+      "count": 2,
+      "bytes": 101334
+    },
+    {
+      "file": "texts-rs-RS210-2007-05-16-0000.json",
+      "count": 2,
+      "bytes": 99864
+    },
+    {
+      "file": "texts-rs-RS210-2007-05-17-0000.json",
+      "count": 2,
+      "bytes": 103419
+    },
+    {
+      "file": "texts-rs-RS210-2007-05-18-0000.json",
+      "count": 2,
+      "bytes": 102320
+    },
+    {
+      "file": "texts-rs-RS210-2007-05-21-0000.json",
+      "count": 2,
+      "bytes": 105811
+    },
+    {
+      "file": "texts-rs-RS210-2007-05-22-0000.json",
+      "count": 2,
+      "bytes": 100019
+    },
+    {
+      "file": "texts-rs-RS211-2007-08-10-0000.json",
+      "count": 2,
+      "bytes": 90661
+    },
+    {
+      "file": "texts-rs-RS211-2007-08-13-0000.json",
+      "count": 2,
+      "bytes": 98689
+    },
+    {
+      "file": "texts-rs-RS211-2007-08-14-0000.json",
+      "count": 2,
+      "bytes": 95241
+    },
+    {
+      "file": "texts-rs-RS211-2007-08-16-0000.json",
+      "count": 2,
+      "bytes": 99126
+    },
+    {
+      "file": "texts-rs-RS211-2007-08-17-0000.json",
+      "count": 2,
+      "bytes": 101365
+    },
+    {
+      "file": "texts-rs-RS211-2007-08-20-0000.json",
+      "count": 2,
+      "bytes": 97783
+    },
+    {
+      "file": "texts-rs-RS211-2007-08-21-0000.json",
+      "count": 2,
+      "bytes": 96187
+    },
+    {
+      "file": "texts-rs-RS211-2007-08-22-0000.json",
+      "count": 2,
+      "bytes": 97327
+    },
+    {
+      "file": "texts-rs-RS211-2007-08-23-0000.json",
+      "count": 2,
+      "bytes": 102471
+    },
+    {
+      "file": "texts-rs-RS211-2007-08-24-0000.json",
+      "count": 2,
+      "bytes": 98181
+    },
+    {
+      "file": "texts-rs-RS211-2007-08-27-0000.json",
+      "count": 2,
+      "bytes": 100274
+    },
+    {
+      "file": "texts-rs-RS211-2007-08-29-0000.json",
+      "count": 2,
+      "bytes": 102081
+    },
+    {
+      "file": "texts-rs-RS211-2007-08-30-0000.json",
+      "count": 2,
+      "bytes": 99978
+    },
+    {
+      "file": "texts-rs-RS211-2007-08-31-0000.json",
+      "count": 2,
+      "bytes": 99049
+    },
+    {
+      "file": "texts-rs-RS212-2007-11-15-0000.json",
+      "count": 2,
+      "bytes": 24233
+    },
+    {
+      "file": "texts-rs-RS212-2007-11-19-0000.json",
+      "count": 2,
+      "bytes": 55913
+    },
+    {
+      "file": "texts-rs-RS212-2007-11-20-0000.json",
+      "count": 2,
+      "bytes": 57208
+    },
+    {
+      "file": "texts-rs-RS212-2007-11-21-0000.json",
+      "count": 2,
+      "bytes": 84223
+    },
+    {
+      "file": "texts-rs-RS212-2007-11-22-0000.json",
+      "count": 2,
+      "bytes": 84012
+    },
+    {
+      "file": "texts-rs-RS212-2007-11-23-0000.json",
+      "count": 2,
+      "bytes": 69787
+    },
+    {
+      "file": "texts-rs-RS212-2007-11-26-0000.json",
+      "count": 2,
+      "bytes": 69742
+    },
+    {
+      "file": "texts-rs-RS212-2007-11-27-0000.json",
+      "count": 2,
+      "bytes": 89977
+    },
+    {
+      "file": "texts-rs-RS212-2007-11-28-0000.json",
+      "count": 2,
+      "bytes": 101715
+    },
+    {
+      "file": "texts-rs-RS212-2007-11-29-0000.json",
+      "count": 2,
+      "bytes": 101720
+    },
+    {
+      "file": "texts-rs-RS212-2007-11-30-0000.json",
+      "count": 2,
+      "bytes": 101446
+    },
+    {
+      "file": "texts-rs-RS212-2007-12-03-0000.json",
+      "count": 2,
+      "bytes": 101196
+    },
+    {
+      "file": "texts-rs-RS212-2007-12-04-0000.json",
+      "count": 2,
+      "bytes": 99787
     },
     {
       "file": "texts-rs-RS212-2007-12-05-0000.json",

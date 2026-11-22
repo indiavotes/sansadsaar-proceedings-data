@@ -241,7 +241,10 @@ def download_pdf(pdf_url: str, *, session: int, date_iso: str, qtype: str,
             os.unlink(pdf_path)
         except OSError:
             pass
-        marker_dir = os.path.join(os.path.dirname(os.path.normpath(pdfs_dir)), "text",
+        # pdfs_dir is <docs>/pdfs/<house>; the derive step consolidates markers from
+        # <docs>/text/<house>, so the marker goes there (it went to <docs>/pdfs/text/<house>,
+        # an ignored folder, so no download failure was ever recorded).
+        marker_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.normpath(pdfs_dir))), "text",
                                   os.path.basename(os.path.normpath(pdfs_dir)))
         try:
             os.makedirs(marker_dir, exist_ok=True)

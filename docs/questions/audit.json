@@ -1,13 +1,13 @@
 {
-  "audited_at": "2026-11-23T11:21:46Z",
+  "audited_at": "2026-11-23T23:00:41Z",
   "totals": {
     "ls_records": 247775,
     "ls_with_text": 148745,
     "ls_pypdf_empty_awaiting_ocr": 5815,
-    "ls_pypdf_error_retryable": 2125,
-    "ls_download_failed_retryable": 4279,
+    "ls_pypdf_error_retryable": 2225,
+    "ls_download_failed_retryable": 4645,
     "ls_ocr_failed_permanent": 0,
-    "ls_never_attempted": 86811,
+    "ls_never_attempted": 86345,
     "rs_records": 2809,
     "rs_with_text": 2744,
     "rs_pypdf_empty_awaiting_ocr": 31,
